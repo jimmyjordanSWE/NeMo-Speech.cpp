@@ -335,6 +335,12 @@ BufferedStreamRunner::poll_endpoint(StreamingUpdate& update) {
     // Keep the masker FSM + cursors: the stream continues into the next
     // utterance.
     fire_eou(head_.get(), opts_, all_tokens_, transcript_, update);
+    // A forced or automatic EOU is an utterance boundary, not a stream
+    // teardown. Re-arm endpointing from the next utterance's speech instead
+    // of carrying the previous utterance's absolute silence timeline into the
+    // resident stream.
+    if (endpointer_)
+        endpointer_->reset();
     return true;
 }
 
@@ -1106,6 +1112,8 @@ CacheStreamRunner::finish_endpoint(StreamingUpdate& update, bool preserve_buffer
     // absolute encoder-frame clock.
     if (head_)
         head_->reset();
+    if (endpointer_)
+        endpointer_->reset();
     zero_caches();
     cache_filled_frames_ = 0;
     std::fill(attn_mask_.begin(), attn_mask_.end(), 0.0f);
