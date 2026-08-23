@@ -337,6 +337,9 @@ class CacheStreamRunner final : public AsrRunner {
     std::vector<float> audio_buf_;
     size_t audio_base_ = 0;
     std::vector<float> mel_buf_;  // (n_mels, T) flat, frame-major
+    // Reused feature-extraction output. Capacity is retained across every
+    // streaming step instead of allocating a temporary mel vector per push.
+    std::vector<float> new_mel_scratch_;
     size_t mel_offset_ = 0;
     // Total number of mel frames produced from audio_buf_ across all step()
     // calls (monotonic). NB: mel_buf_ also gets frames *consumed* from the

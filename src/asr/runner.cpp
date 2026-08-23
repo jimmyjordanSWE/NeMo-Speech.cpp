@@ -813,6 +813,23 @@ CacheStreamRunner::CacheStreamRunner(
     const int left_ctx = enc_cfg_.cache_left_ctx;
     attn_mask_.assign(left_ctx + enc_cfg_.cache_chunk_frames, 0.0f);
 
+    // Keep the normal streaming working set resident. The audio store is
+    // trimmed after each step, and the mel store needs one live chunk plus the
+    // synthetic tail used to commit an endpoint. These reserves cover both
+    // without constraining unusually large caller pushes.
+    const int n_mels = model_->fe_config().n_mels;
+    const int chunk_size_mel =
+        pre_encode_cache_size_ + enc_cfg_.subsampling_factor * (1 + enc_cfg_.cache_right_ctx);
+    const int shift_size_mel = enc_cfg_.subsampling_factor *
+        (1 + enc_cfg_.cache_right_ctx - cache_drop_size_);
+    audio_buf_.reserve(static_cast<size_t>(model_->fe_config().sample_rate));
+    mel_buf_.reserve(static_cast<size_t>(
+        pre_encode_cache_size_ + 2 * chunk_size_mel + shift_size_mel) * n_mels);
+    new_mel_scratch_.reserve(static_cast<size_t>(chunk_size_mel + shift_size_mel) * n_mels);
+    all_tokens_.reserve(128);
+    last_step_new_tokens_.reserve(32);
+    transcript_.reserve(512);
+
     head_ = model->make_transducer_decoder(cfg.decoder);
 
     build_vad_stack(
@@ -983,8 +1000,8 @@ CacheStreamRunner::step() {
     const int n_mels = model_->fe_config().n_mels;
     const size_t audio_end = audio_base_ + audio_buf_.size();
     const int64_t i_start = total_mel_frames_produced_;
-    std::vector<float> new_mel;
-    const int n = produce_new_mel_frames(model_->fe(), audio_buf_, audio_base_, i_start, new_mel);
+    const int n = produce_new_mel_frames(
+        model_->fe(), audio_buf_, audio_base_, i_start, new_mel_scratch_);
     if (n > 0) {
         // VAD masking happens in mel space, before these frames are appended to
         // mel_buf_ and consumed by the encoder. Feed all audio not yet seen by
@@ -997,9 +1014,10 @@ CacheStreamRunner::step() {
             vad_->observe_audio(new_audio, n_new);  // inference + binarize, once
             audio_fed_to_vad_ = audio_end;
             if (vad_masker_)
-                vad_masker_->apply(new_mel.data(), n, i_start);
+                vad_masker_->apply(new_mel_scratch_.data(), n, i_start);
         }
-        mel_buf_.insert(mel_buf_.end(), new_mel.begin(), new_mel.end());
+        mel_buf_.insert(
+            mel_buf_.end(), new_mel_scratch_.begin(), new_mel_scratch_.end());
         total_mel_frames_produced_ = i_start + n;
     }
 
@@ -1091,7 +1109,10 @@ CacheStreamRunner::finish_endpoint(StreamingUpdate& update, bool preserve_buffer
     zero_caches();
     cache_filled_frames_ = 0;
     std::fill(attn_mask_.begin(), attn_mask_.end(), 0.0f);
-    mel_buf_ = std::move(next_mel);
+    // Preserve the resident working-set capacity across utterances. Moving the
+    // usually small next_mel vector here would throw away the preallocation and
+    // make the next hotkey activation grow mel_buf_ again.
+    mel_buf_.assign(next_mel.begin(), next_mel.end());
     mel_offset_ = 0;
     stream_zero_padded_ = false;
     total_frames_emitted_ = real_frames_emitted;
