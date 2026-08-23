@@ -60,6 +60,12 @@ struct Alternative {         // proto: SpeechRecognitionAlternative
 };
 
 struct Result {  // proto: Streaming/SpeechRecognitionResult
+    // Decoder token ids emitted by the runner for this update, in stream
+    // order. These are runtime emissions, not an irreversible commit claim.
+    std::vector<int> emitted_token_ids;
+    // Decoder transcript before final post-processing. Interim results already
+    // use this value as their public transcript.
+    std::string raw_transcript;
     // Ranked best-first and capped by max_alternatives.
     std::vector<Alternative> alternatives;
     bool is_final = true;

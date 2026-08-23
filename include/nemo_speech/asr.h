@@ -153,6 +153,7 @@ typedef struct nemo_speech_asr_recognizer_config {
     const nemo_speech_asr_postproc_config* postproc;
     const nemo_speech_asr_diar_config* diar;
     const nemo_speech_asr_batching_config* batching;
+    bool log_status;  // model/execution summaries; false keeps the library quiet
 } nemo_speech_asr_recognizer_config;
 
 // ---- Per-request options ----
@@ -199,6 +200,12 @@ nemo_speech_asr_recognition_options_default(void);
 
 NEMO_SPEECH_ASR_API nemo_speech_asr_status nemo_speech_asr_create(
     const nemo_speech_asr_recognizer_config* cfg, nemo_speech_asr_recognizer** out);
+
+// Build lazy inference graphs and populate reusable runtime pools. This is
+// intentionally separate from creation so applications can expose an explicit
+// load/warm/ready lifecycle and keep first-request work out of the hot path.
+NEMO_SPEECH_ASR_API nemo_speech_asr_status
+nemo_speech_asr_warmup(nemo_speech_asr_recognizer* recognizer);
 
 NEMO_SPEECH_ASR_API void nemo_speech_asr_destroy(nemo_speech_asr_recognizer* recognizer);
 
@@ -250,6 +257,17 @@ NEMO_SPEECH_ASR_API void nemo_speech_asr_stream_close(nemo_speech_asr_stream* st
 
 NEMO_SPEECH_ASR_API bool nemo_speech_asr_result_is_final(const nemo_speech_asr_result* result);
 NEMO_SPEECH_ASR_API float nemo_speech_asr_result_audio_processed(
+    const nemo_speech_asr_result* result);
+// Token ids emitted by the runtime for this result, in stream order. These
+// accessors report decoder emissions only; the ABI does not claim that an
+// emission is irreversible or represents a committed transcript prefix.
+NEMO_SPEECH_ASR_API size_t nemo_speech_asr_result_emitted_token_count(
+    const nemo_speech_asr_result* result);
+NEMO_SPEECH_ASR_API int32_t nemo_speech_asr_result_emitted_token_id(
+    const nemo_speech_asr_result* result, size_t index);
+// Transcript before final post-processing. For interim results this is the
+// same text as nemo_speech_asr_result_transcript(result, 0).
+NEMO_SPEECH_ASR_API const char* nemo_speech_asr_result_raw_transcript(
     const nemo_speech_asr_result* result);
 // 1-based input channel this result belongs to (proto channel_tag). Mono input
 // is always 1; multi-channel recognition is not implemented, so this is 1 today.

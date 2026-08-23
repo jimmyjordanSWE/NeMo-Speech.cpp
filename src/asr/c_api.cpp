@@ -183,6 +183,8 @@ to_config(const nemo_speech_asr_recognizer_config* c) {
             b->state_arena_slots > 0)
             cfg.batching.state_arena_slots = b->state_arena_slots;
     }
+    if (HAS_FIELD(c, nemo_speech_asr_recognizer_config, log_status))
+        cfg.log_status = c->log_status;
     return cfg;
 }
 
@@ -286,6 +288,16 @@ nemo_speech_asr_create(
         auto h = std::make_unique<nemo_speech_asr_recognizer>();
         h->impl = std::make_unique<asr_core::Recognizer>(std::move(rc));
         *out = h.release();
+        return NEMO_SPEECH_ASR_OK;
+    });
+}
+
+nemo_speech_asr_status
+nemo_speech_asr_warmup(nemo_speech_asr_recognizer* recognizer) {
+    if (!recognizer)
+        return NEMO_SPEECH_ASR_ERROR_INVALID_ARGUMENT;
+    return guard([&] {
+        recognizer->impl->warmup();
         return NEMO_SPEECH_ASR_OK;
     });
 }
@@ -409,6 +421,20 @@ nemo_speech_asr_result_is_final(const nemo_speech_asr_result* result) {
 float
 nemo_speech_asr_result_audio_processed(const nemo_speech_asr_result* result) {
     return result ? result->value.audio_processed : 0.0f;
+}
+size_t
+nemo_speech_asr_result_emitted_token_count(const nemo_speech_asr_result* result) {
+    return result ? result->value.emitted_token_ids.size() : 0;
+}
+int32_t
+nemo_speech_asr_result_emitted_token_id(const nemo_speech_asr_result* result, size_t index) {
+    return result && index < result->value.emitted_token_ids.size()
+               ? result->value.emitted_token_ids[index]
+               : -1;
+}
+const char*
+nemo_speech_asr_result_raw_transcript(const nemo_speech_asr_result* result) {
+    return result ? result->value.raw_transcript.c_str() : "";
 }
 int32_t
 nemo_speech_asr_result_channel_tag(const nemo_speech_asr_result* result) {

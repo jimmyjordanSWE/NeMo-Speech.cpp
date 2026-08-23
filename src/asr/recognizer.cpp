@@ -384,6 +384,8 @@ RecognitionStream::force_endpoint() {
 Result
 RecognitionStream::build_result_(const StreamingUpdate& u, bool is_final) const {
     Result r;
+    r.emitted_token_ids = u.new_token_ids;
+    r.raw_transcript = u.transcript_so_far;
     r.is_final = is_final;
     r.stability = is_final ? 1.0f : 0.0f;
     r.channel_tag = 1;
