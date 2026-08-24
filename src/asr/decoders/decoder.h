@@ -174,6 +174,11 @@ class Decoder {
         throw std::runtime_error("decoder does not accept device-resident encoder output");
     }
 
+    // Whether the decoder can consume the encoder's device-resident output
+    // for the current backend. Callers use this cold-path capability to avoid
+    // requesting a host readback from a compatible encoder session.
+    virtual bool supports_device_output() const { return false; }
+
     virtual int blank_id() const = 0;
     virtual const std::vector<std::string>& vocab() const = 0;
 

@@ -158,6 +158,7 @@ class RnntGreedyDecoder : public Decoder {
     std::vector<int> step_device(
         const ggml_runtime::DeviceTensor& enc_out, int d_model, int T,
         int64_t frame_offset) override;
+    bool supports_device_output() const override { return true; }
     int blank_id() const override { return engine_->rnnt_config().blank_id; }
     const std::vector<std::string>& vocab() const override { return engine_->vocab(); }
 

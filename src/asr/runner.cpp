@@ -921,17 +921,20 @@ CacheStreamRunner::process_one_chunk(bool is_last) {
     auto _e0 = _clk::now();
 
     // mel_buf_ must already hold >= chunk_size_mel frames. The model binds this
-    // stream's device-resident cache (cache_state_), runs the encoder, and reads
-    // back enc_out; the cache persists on device between chunks (in-graph
-    // feedback). Allocated lazily on first use so the Session builds with final R.
+    // stream's device-resident cache (cache_state_) and runs the encoder; the
+    // cache persists on device between chunks (in-graph feedback). Allocated
+    // lazily on first use so the Session builds with final R.
     if (!cache_state_.valid()) {
         cache_state_ = model_->make_cache_state();
     }
-    // Cached encoder activations are shared across streams, so hand the
-    // projection to the decoder through stream-owned host storage.
+    // A compatible RNNT head consumes the projection directly from the encoder
+    // session's device storage. Other decoders retain the host-buffer path.
+    const bool use_device_output = head_ && head_->supports_device_output();
+    last_device_enc_out_ = {};
     model_->encode_cache_aware(
         cache_state_, mel_buf_.data() + mel_offset_, chunk_size_mel, attn_mask_.data(),
-        static_cast<int>(attn_mask_.size()), last_enc_out_, last_enc_T_, prompt_index_);
+        static_cast<int>(attn_mask_.size()), last_enc_out_, last_enc_T_, prompt_index_,
+        use_device_output ? &last_device_enc_out_ : nullptr);
     auto _e1 = _clk::now();
 
     cache_filled_frames_ = std::min(cache_filled_frames_ + last_enc_T_, left_ctx);
@@ -946,9 +949,13 @@ CacheStreamRunner::process_one_chunk(bool is_last) {
         // encoder representation. This projection is computed once for the
         // whole chunk (after optional prompt fusion) and reused by every symbol
         // attempt in the greedy head.
-        auto ids = head_->step(
-            last_enc_out_.data(), model_->rnnt_config().joint_dim, last_enc_T_,
-            total_frames_emitted_);
+        auto ids = use_device_output
+                       ? head_->step_device(
+                             last_device_enc_out_, model_->rnnt_config().joint_dim, last_enc_T_,
+                             total_frames_emitted_)
+                       : head_->step(
+                             last_enc_out_.data(), model_->rnnt_config().joint_dim, last_enc_T_,
+                             total_frames_emitted_);
         const bool first_tokens = all_tokens_.empty();
         for (int id : ids) {
             all_tokens_.push_back(id);
@@ -1126,6 +1133,7 @@ CacheStreamRunner::finish_endpoint(StreamingUpdate& update, bool preserve_buffer
     total_frames_emitted_ = real_frames_emitted;
     chunks_processed_ = real_chunks_processed;
     last_enc_out_.clear();
+    last_device_enc_out_ = {};
     last_enc_T_ = 0;
     finalizing_ = false;
 }
@@ -1300,6 +1308,7 @@ CacheStreamRunner::reset() {
     chunks_processed_ = 0;
     total_frames_emitted_ = 0;
     last_enc_out_.clear();
+    last_device_enc_out_ = {};
     last_enc_T_ = 0;
     finalized_ = false;
     finalizing_ = false;

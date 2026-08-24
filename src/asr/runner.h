@@ -369,6 +369,9 @@ class CacheStreamRunner final : public AsrRunner {
 
     // Encoder output from most recent chunk (column-major (d_model, T_out)).
     std::vector<float> last_enc_out_;
+    // Non-owning device output valid until the next encoder Session run. It is
+    // consumed immediately by a compatible RNNT head before that can happen.
+    ggml_runtime::DeviceTensor last_device_enc_out_;
     int last_enc_T_ = 0;
 
     // RNNT head (null for CTC or when constructed via model_path ctor).

@@ -5,6 +5,7 @@
 #include <ggml.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <stdexcept>
 
@@ -167,7 +168,67 @@ class CacheAwareEncoder::EncoderBatcher {
                   }
               }
               return result;
+          },
+          [this](const Key& key, Request&& request) {
+              return execute_single(key, std::move(request));
           }) {}
+
+    Result execute_single(const Key& key, Request&& request) {
+        const ggml_nvtx::range nvtx("asr.encoder.single");
+        const int Tout = owner_->cfg_.cache_chunk_frames;
+        if (request.mel.size() != static_cast<size_t>(owner_->n_mels_) * key.mel_frames ||
+            request.mask.size() != static_cast<size_t>(key.mask_len) ||
+            (key.tail_dim > 0 &&
+             request.tail.size() != static_cast<size_t>(key.tail_dim) * Tout)) {
+            throw std::runtime_error("encoder single item has an incompatible input shape");
+        }
+        if (request.reset)
+            owner_->zero_slot(request.slot);
+
+        std::array<int32_t, 2> slots = {request.slot, request.slot};
+        int32_t ring_head = request.ring_head;
+        std::vector<float> output;
+        const bool device_only = key.device_output;
+        if (!device_only)
+            output.resize(static_cast<size_t>(owner_->output_dim_) * Tout);
+        std::vector<ggml_runtime::Session::Input> inputs = {
+            {"input.features", GGML_TYPE_F32, request.mel.data(),
+             {owner_->n_mels_, key.mel_frames, 1, 1}},
+            {owner_->encoder_->attn_mask_name(), GGML_TYPE_F32, request.mask.data(),
+             {key.mask_len, 1}},
+            {"encoder.slot_ids", GGML_TYPE_I32, slots.data(), {1, 2}},
+            {"encoder.cache.ring_heads", GGML_TYPE_I32, &ring_head, {1}}};
+        if (key.tail_dim > 0)
+            inputs.push_back({
+                "encoder.tail.input", GGML_TYPE_F32, request.tail.data(),
+                {key.tail_dim, Tout, 1}});
+        if (device_only) {
+            for (auto& input : inputs)
+                input.synchronous_upload = true;
+        }
+
+        Result result;
+        result.T = Tout;
+        if (device_only) {
+            result.device_output = {};
+        }
+        std::vector<ggml_runtime::Session::Output> outputs(1);
+        outputs[0].index = 0;
+        if (device_only) {
+            outputs[0].device_tensor = &result.device_output;
+        } else {
+            outputs[0].host_buffer = output.data();
+            outputs[0].nbytes = output.size() * sizeof(float);
+        }
+        {
+            const ggml_nvtx::range compute_nvtx("asr.encoder.session.single");
+            owner_->session_->run(inputs, outputs);
+        }
+        if (!device_only)
+            result.output = std::move(output);
+        return result;
+    }
+
     Result run(
         int slot, int ring_head, const float* mel, int mel_frames, const float* mask, int mask_len,
         const float* tail, int tail_dim, bool reset, bool device_output) {

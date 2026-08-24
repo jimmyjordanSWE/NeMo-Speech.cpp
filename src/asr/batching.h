@@ -217,9 +217,13 @@ class MicroBatcher {
    public:
     using RunBatch =
         std::function<std::vector<Result>(const Key&, std::vector<Request>&& requests)>;
+    using RunSingle = std::function<Result(const Key&, Request&& request)>;
 
-    MicroBatcher(BatchingConfig cfg, RunBatch run_batch, KeyEqual equal = KeyEqual{})
-        : cfg_(sanitize(cfg)), run_batch_(std::move(run_batch)), equal_(std::move(equal)) {
+    MicroBatcher(
+        BatchingConfig cfg, RunBatch run_batch, RunSingle run_single = {},
+        KeyEqual equal = KeyEqual{})
+        : cfg_(sanitize(cfg)), run_batch_(std::move(run_batch)),
+          run_single_(std::move(run_single)), equal_(std::move(equal)) {
         if (!run_batch_)
             throw std::invalid_argument("MicroBatcher: run callback is empty");
         if (cfg_.enabled && cfg_.max_batch_size > 1)
@@ -238,34 +242,10 @@ class MicroBatcher {
     Result run(Key key, Request request, int target_batch_size = current_batch_cohort_target()) {
         std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
         if (!worker_.joinable()) {
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                if (stopping_)
-                    throw std::runtime_error("MicroBatcher: submit after shutdown");
-            }
-            std::vector<Request> requests;
-            requests.push_back(std::move(request));
-            auto results = run_batch_(key, std::move(requests));
-            if (results.size() != 1)
-                throw std::runtime_error(
-                    "MicroBatcher: scalar callback returned wrong result count");
-            record_batch(1);
-            return std::move(results.front());
+            return run_single_or_batch(std::move(key), std::move(request));
         }
         if (target_batch_size == 1) {
-            {
-                std::lock_guard<std::mutex> lock(mu_);
-                if (stopping_)
-                    throw std::runtime_error("MicroBatcher: submit after shutdown");
-            }
-            std::vector<Request> requests;
-            requests.push_back(std::move(request));
-            auto results = run_batch_(key, std::move(requests));
-            if (results.size() != 1)
-                throw std::runtime_error(
-                    "MicroBatcher: scalar callback returned wrong result count");
-            record_batch(1);
-            return std::move(results.front());
+            return run_single_or_batch(std::move(key), std::move(request));
         }
         // The queued path is synchronized by mu_ and shutdown joins worker_;
         // reserve the lifecycle lock for callbacks that execute on the caller.
@@ -293,18 +273,8 @@ class MicroBatcher {
     // when it can prove there is one active decode scope.
     Result run_inline(Key key, Request request) {
         std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
-        {
-            std::lock_guard<std::mutex> lock(mu_);
-            if (stopping_)
-                throw std::runtime_error("MicroBatcher: submit after shutdown");
-        }
-        std::vector<Request> requests;
-        requests.push_back(std::move(request));
-        auto results = run_batch_(key, std::move(requests));
-        if (results.size() != 1)
-            throw std::runtime_error("MicroBatcher: inline callback returned wrong result count");
-        record_batch(1);
-        return std::move(results.front());
+        (void)lifecycle_lock;
+        return run_single_or_batch(std::move(key), std::move(request));
     }
 
     BatchMetrics metrics() const {
@@ -334,6 +304,27 @@ class MicroBatcher {
 
    private:
     using Clock = std::chrono::steady_clock;
+
+    Result run_single_or_batch(Key key, Request request) {
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (stopping_)
+                throw std::runtime_error("MicroBatcher: submit after shutdown");
+        }
+        if (run_single_) {
+            auto result = run_single_(key, std::move(request));
+            record_batch(1);
+            return result;
+        }
+        std::vector<Request> requests;
+        requests.push_back(std::move(request));
+        auto results = run_batch_(key, std::move(requests));
+        if (results.size() != 1)
+            throw std::runtime_error("MicroBatcher: scalar callback returned wrong result count");
+        record_batch(1);
+        return std::move(results.front());
+    }
+
     struct Job {
         Job(Key k, Request r, int target)
             : key(std::move(k)), request(std::move(r)), queued_at(Clock::now()),
@@ -434,6 +425,7 @@ class MicroBatcher {
 
     BatchingConfig cfg_;
     RunBatch run_batch_;
+    RunSingle run_single_;
     KeyEqual equal_;
     mutable std::shared_mutex lifecycle_mu_;
     mutable std::mutex mu_;
