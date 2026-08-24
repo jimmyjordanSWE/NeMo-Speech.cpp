@@ -100,7 +100,10 @@ def _normalized_outtype(architecture: str, outtype: str) -> str:
     if value == "fp16":
         value = "f16"
     supported = {
-        "asr": {"f16", "bf16", "q8_0", "q4_k", "q5_k", "q6_k", "nvfp4", "mxfp4"},
+        "asr": {
+            "f16", "bf16", "q8_0", "q2_k", "q3_k", "q4_k", "q5_k", "q6_k",
+            "nvfp4", "mxfp4",
+        },
         "diarization": {
             "f32",
             "f16",

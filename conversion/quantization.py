@@ -20,6 +20,8 @@ except Exception:  # pragma: no cover - depends on the installed gguf release
 
 QK_K = 256
 K_QUANTS = (
+    GGMLQuantizationType.Q2_K,
+    GGMLQuantizationType.Q3_K,
     GGMLQuantizationType.Q4_K,
     GGMLQuantizationType.Q5_K,
     GGMLQuantizationType.Q6_K,
@@ -30,6 +32,8 @@ DEPLOYMENT_WEIGHT_TYPES = {
     "bf16": (GGMLQuantizationType.BF16, GGMLQuantizationType.F32, 32),
     "fp16": (GGMLQuantizationType.F16, GGMLQuantizationType.F32, 1),
     "q8_0": (GGMLQuantizationType.Q8_0, GGMLQuantizationType.F32, 7),
+    "q2_k": (GGMLQuantizationType.Q2_K, GGMLQuantizationType.F32, 10),
+    "q3_k": (GGMLQuantizationType.Q3_K, GGMLQuantizationType.F32, 12),
     "q6_k": (GGMLQuantizationType.Q6_K, GGMLQuantizationType.F32, 18),
     "q5_k": (GGMLQuantizationType.Q5_K, GGMLQuantizationType.F32, 17),
     "q4_k": (GGMLQuantizationType.Q4_K, GGMLQuantizationType.F32, 15),
@@ -51,6 +55,10 @@ def row_size_bytes(qtype: GGMLQuantizationType, elements: int) -> int:
         return elements * 2
     if qtype == GGMLQuantizationType.Q8_0:
         return (elements // 32) * 34
+    if qtype == GGMLQuantizationType.Q2_K:
+        return (elements // 256) * 84
+    if qtype == GGMLQuantizationType.Q3_K:
+        return (elements // 256) * 110
     if qtype == GGMLQuantizationType.NVFP4:
         return (elements // 64) * 36
     if qtype == GGMLQuantizationType.MXFP4:
